@@ -218,7 +218,12 @@ private struct FanoutState: Codable {
                 for (gate, result, count) in [("start", "baseline.json", 9), ("burst-go", "burstA.json", 192),
                                                ("burstB-go", "burstB.json", 192), ("offline-go", "offline.json", 3), ("final-go", "final.json", 9)] {
                     _ = try await wait(gate)
-                    for _ in 0..<count {
+                    let interval = result.hasPrefix("burst") ? (config["writeIntervalMillis"] as? Double ?? 0) / 1000 : 0
+                    let phaseStart = ProcessInfo.processInfo.systemUptime
+                    for ordinal in 0..<count {
+                        let offeredAt = phaseStart + Double(ordinal) * interval
+                        let delay = offeredAt - ProcessInfo.processInfo.systemUptime
+                        if interval > 0 && delay > 0 { try await Task.sleep(for: .nanoseconds(Int64(delay * 1_000_000_000))) }
                         if FileManager.default.fileExists(atPath: directory.appendingPathComponent("abort").path) { throw NSError(domain: "Fanout controller aborted", code: 2) }
                         let index = sequence % 3; sequence += 1
                         let request = CUUserChange(); request.userIdentifier = states[index].userIdentifier
@@ -229,7 +234,8 @@ private struct FanoutState: Codable {
                         XCTAssertEqual(response.outcome, "updated"); XCTAssertEqual(response.revision, request.expectedRevision + 1)
                         states[index] = FanoutState(response)
                         writes.append(["user": response.userIdentifier, "revision": response.revision, "sentAt": begin,
-                                       "replyAt": ProcessInfo.processInfo.systemUptime, "phase": result])
+                                       "replyAt": ProcessInfo.processInfo.systemUptime, "phase": result,
+                                       "offeredAt": interval > 0 ? offeredAt : begin])
                         if result == "baseline.json" { try await Task.sleep(for: .milliseconds(100)) }
                     }
                     try save(result)

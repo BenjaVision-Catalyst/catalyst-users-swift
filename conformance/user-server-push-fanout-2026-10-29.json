@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-29",
+  "passed": true,
+  "scope": "Local native Swift macOS clients in independent processes; one configured authority Runtime at a time; GT and GemStone",
+  "profiles": [
+    1,
+    8,
+    32,
+    60
+  ],
+  "authorities": [
+    "gt",
+    "gemstone"
+  ],
+  "testClass": "NativeFanoutUsersTests",
+  "sourceSHA256": "1359410c792e46347ac6e3cbb99544a8860926df39614f74720d41f7ecbf928d",
+  "connectSwiftRevision": "2e3cb808e366b911adddec05cc8802dca0abc472",
+  "standaloneSchemaTestsPassed": 5,
+  "evidence": "https://github.com/BenjaVision-Catalyst/catalyst-users/blob/main/conformance/user-server-push-fanout-2026-10-29.json",
+  "limits": [
+    "Existing single-listener connection ceiling is 64; Users feed policy permits at most 64 and defaults to 16. Qualification configured 64 feeds.",
+    "Latest-state semantics coalesce intermediate revisions; delivered-state latency is not a guarantee of delivery for every write.",
+    "Controlled close/reconnect on localhost; no abrupt process crash, lossy WAN, multi-host, Unreal or iOS load qualification in this run.",
+    "These workloads establish tested behavior and the local curve, not maximum production throughput or an SLO.",
+    "Client XCTest workers use debug Swift builds; these numbers are not release-client capacity measurements."
+  ]
+}

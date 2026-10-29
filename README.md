@@ -54,6 +54,13 @@ notification stream, with bounded backpressure and explicit session-scoped revoc
 never automatically replayed. See service documentation for configurable feed
 limits and the dedicated `--push-only --authority gt` native qualification.
 
+`NativeFanoutUsersTests` is an opt-in macOS worker for the Users repository's
+`scripts/qualify-user-fanout.py`. It exercises shared Users, paused notification
+consumers, reconnect resnapshot and cached identity in independent processes.
+The controller holds the existing MCP lease through normal Runtime cleanup.
+See [fan-out evidence](conformance/user-server-push-fanout-2026-10-29.json) for
+the measured scope and limits.
+
 ## License
 
 This repository is licensed under the [Catalyst Developer License](LICENSE).

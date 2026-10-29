@@ -1,12 +1,12 @@
 {
-  "originHash" : "affc1cbdf2a7d4a5404894043b58ddc2166426ed5b1afad76c08d9041f51e075",
+  "originHash" : "e34d92318bea63abc1e9185158b7871f414cfbfee22e9c6dacd50a743cf628e2",
   "pins" : [
     {
       "identity" : "catalystconnectswift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/BenjaVisionPro/CatalystConnectSwift.git",
       "state" : {
-        "revision" : "7c233b5e8d3967cf3dc726a2433dcc4b567d47dd"
+        "revision" : "2e3cb808e366b911adddec05cc8802dca0abc472"
       }
     },
     {

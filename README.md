@@ -25,8 +25,15 @@ import CatalystUsers
 let users = try CUUsers(connect: connect)
 try await users.prepare()             // One startup description/service probe.
 let result = try await users.createUser(CUUser(name: "Ada"))
+let found = try await users.getUser(named: "Ada") // CUUser?; nil means explicit not found.
 // result is a new CUUser reconstructed from the committed server response.
 ```
+
+Lookup matches the exact, case-sensitive name. An ambiguous name throws
+`ObjectBindingError.refused(status: 422)`; absence returns nil without substituting
+`unknownUser`. Lookup requests reuse the model's name description and successful
+results use its unchanged complete description. Enable server operations 1, 2 and
+65534; `prepare()` establishes both agreements.
 
 The object API runs on MainActor; descriptions/native objects stay local, while
 only bounded bytes cross the transport actor. `prepare()` must be repeated after

@@ -5,6 +5,14 @@ import CatalystConnectObjects
 @testable import CatalystUsers
 
 @MainActor final class SchemaTests: XCTestCase {
+    func testLookupReusesUserNameDescription() throws {
+        let schema = try ObjectSchema(exemplar: CUUserLookup())
+        XCTAssertEqual(schema.revision, "31b7f14dece1b6bbf864672c923ae7a0170b058c053bec846e9db8be5ed0e8f1")
+        let query = CUUserLookup(name: "Ada é🛰/\"")
+        XCTAssertEqual(try schema.decode(schema.encode(query)).name, query.name)
+        XCTAssertThrowsError(try schema.encode(CUUserLookup(name: String(repeating: "é", count: 513))))
+        XCTAssertThrowsError(try schema.decode(Data("[\"\(schema.revision)\",[null]]".utf8)))
+    }
     func testNativeUserAgreesWithLiveSmalltalkDescription() throws {
         let schema = try ObjectSchema(exemplar: CUUser())
         XCTAssertEqual(schema.revision, "742282f3bd6d47c824c6c12a2244dcb79ac5b13ba1d94aa4bd60b843608185cb")

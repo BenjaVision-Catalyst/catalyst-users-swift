@@ -148,7 +148,10 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
         guard !synchronizing, !stopped else { return }
         synchronizing = true; defer { synchronizing = false }
         let current = objects.values.compactMap(\.value)
-        guard !current.isEmpty else { return }
+        guard !current.isEmpty else {
+            if policy.automaticRefresh, preparedSession != nil { await maintainSubscriptions() }
+            return
+        }
         do { try await ensureReady() }
         catch {
             preparedSession = nil
@@ -207,12 +210,12 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
             for identifier in retained.subtracting(subscriptions) {
                 guard let user = identities[identifier]?.value else { continue }
                 let change = CUUserChange(); change.operationIdentifier = feedKey; change.userIdentifier = identifier; change.expectedRevision = user.replica.revision
+                subscriptions.insert(identifier) // Accept a push that races the watch RPC reply.
                 let state = try await subscribe.call(change)
                 guard state.outcome == "current" else { throw CUUserFabricError.refused }
                 if state.revision >= user.replica.revision { try install(state, into: user) }
-                subscriptions.insert(identifier)
             }
-            startReceiving()
+            if subscriptions.isEmpty { resetFeed() } else { startReceiving() }
         } catch {
             for user in objects.values.compactMap(\.value) { report(user, error) }
             preparedSession = nil; resetFeed()
@@ -222,29 +225,36 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
         guard receiving == nil, !subscriptions.isEmpty, !stopped, policy.automaticRefresh else { return }
         let generation = receiveGeneration
         receiving = Task { @MainActor [weak self] in
-            var acknowledgedID = "", acknowledgedRevision: Int64 = 0
-            while !Task.isCancelled {
-                guard let context = self, generation == context.receiveGeneration, !context.stopped, context.policy.automaticRefresh, !context.subscriptions.isEmpty else { return }
-                let change = CUUserChange(); change.operationIdentifier = context.feedKey
-                change.userIdentifier = acknowledgedID; change.expectedRevision = acknowledgedRevision
-                do {
-                    let state = try await context.receive.call(change, timeout: .seconds(20))
-                    guard generation == context.receiveGeneration, !Task.isCancelled else { return }
-                    if state.outcome == "renew" { continue } // Lease heartbeat carries no User snapshot.
-                    guard state.outcome == "current", context.subscriptions.contains(state.userIdentifier) else { throw CUUserFabricError.incompatibleState }
-                    acknowledgedID = state.userIdentifier; acknowledgedRevision = state.revision
+            guard let context = self else { return }
+            let change = CUUserChange(); change.operationIdentifier = context.feedKey
+            var target: ConnectSubscription?
+            do {
+                let (subscription, setup) = try await context.receive.subscribe(change)
+                target = subscription
+                guard setup.outcome == "subscribed", generation == context.receiveGeneration, !Task.isCancelled else {
+                    await context.transport.unsubscribe(subscription); return
+                }
+                for try await reply in subscription.events {
+                    guard generation == context.receiveGeneration, !Task.isCancelled else { break }
+                    let state = try context.receive.decodeNotification(reply)
+                    guard state.outcome == "current" else { throw CUUserFabricError.incompatibleState }
+                    guard context.subscriptions.contains(state.userIdentifier) else { continue } // A retired watch may have a queued event.
                     if let user = context.identities[state.userIdentifier]?.value {
                         let token = ObjectIdentifier(user)
-                        if context.writesInFlight.contains(token) { context.deferredStates[token] = state }
+                        if context.writesInFlight.contains(token) {
+                            if state.revision > (context.deferredStates[token]?.revision ?? 0) { context.deferredStates[token] = state }
+                        }
                         else if state.revision > user.replica.revision { try context.install(state, into: user) }
                     }
-                } catch {
-                    guard generation == context.receiveGeneration else { return }
+                }
+            } catch {
+                if generation == context.receiveGeneration {
                     context.preparedSession = nil; context.resetFeed()
                     for user in context.objects.values.compactMap(\.value) where user.replica.phase == .live { user.replica.transition(.stale) }
-                    return
                 }
             }
+            if let target { await context.transport.unsubscribe(target) }
+
         }
     }
     func resolve(_ user: CUUser, keepLocal: Bool) {

@@ -26,8 +26,8 @@ Enable server operations 3/4/5/6/7/8/9/65534 with an authoritative Users binding
 creation/update permissions are peer scoped, without account/tenant authorization.
 Exact name lookup returns nil for absence and refuses ambiguous matches. Managed
 super-user state is server owned. Magritte metadata supports client UI work;
-no UI generator is delivered here. Updates arrive through one server-held change
-receive per scope; idle clients do not poll User state.
+no UI generator is delivered here. Updates arrive on the connection’s server-initiated reliable QUIC notification
+stream after a single subscription setup. Idle clients send no receive/renew RPCs.
 
 For legacy operations 1/2 call `prepare()` then `createUserSnapshot` or
 `getUserSnapshot(named:)`; prepare again after reconnect. These preserve the
@@ -49,8 +49,8 @@ graph/4 transfer and production account security remain future work.
 
 GemStone authorities deliver changes after commit. GT authorities deliver after
 volatile Runtime finalization, without claiming persistence/rollback. The feed
-reuses deferred replies, coalesces by User identity, and renews on change or a
-bounded lease heartbeat. Reconnect resubscribes/resnapshots; unknown mutations are
+coalesces finalized state by User identity and publishes over the persistent QUIC
+notification stream, with bounded backpressure and explicit session-scoped revocation. Reconnect resubscribes/resnapshots; unknown mutations are
 never automatically replayed. See service documentation for configurable feed
 limits and the dedicated `--push-only --authority gt` native qualification.
 

@@ -49,9 +49,17 @@ import CatalystUsers
             let observedValue = try await observers.getUser(named: original.name)
             let observed = try XCTUnwrap(observedValue)
             XCTAssertEqual(observed.replica.identifier, original.replica.identifier)
+            let readyDeadline = ContinuousClock.now + .seconds(20)
+            while await remote.activeSubscriptionCount == 0 && ContinuousClock.now < readyDeadline { try await Task.sleep(for: .milliseconds(20)) }
+            let active = await remote.activeSubscriptionCount
+            XCTAssertEqual(active, 1)
+            guard active == 1 else { throw ConnectError.notReady }
             try await Task.sleep(for: .milliseconds(300))
+            let requestsBefore = try await remote.submittedRequestCount()
             try marker("idle-start.json")
-            try await Task.sleep(for: .seconds(16)) // Covers a lease heartbeat; no periodic User reads.
+            try await Task.sleep(for: .seconds(16)) // Longer than the retired 15-second renewal interval.
+            let requestsAfter = try await remote.submittedRequestCount()
+            XCTAssertEqual(requestsBefore, requestsAfter, "No receive/renew or User-read requests while idle")
             try marker("idle-end.json")
             original.name = prefix + ":push-held"
             await users.synchronizeNow() // Trusted controller holds this before commit/finalization.

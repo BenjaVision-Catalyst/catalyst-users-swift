@@ -1,29 +1,53 @@
 # Catalyst Users for Swift
 
-Catalyst Users for Swift is the planned native client for Apple applications
-that need to work with Catalyst user accounts and personal controls. It aims
-to expose Users operations through Swift while Connect handles communication.
-This repository is currently a placeholder, with no Swift package or working
-Users API yet.
+A native `CUUser` model and `CUUsers` API using the generic description-derived
+Connect object binding. The model owns its Magritte descriptions and native field
+accessors. No Users-specific wire schema or codec exists.
 
-## Planned role
+Build the combined Apple package from the pinned Connect Swift repository:
 
-- Native Swift values and a client interface for Catalyst Users.
-- Account and personal-control operations owned by the Users service.
-- Communication through the Swift Catalyst Connect implementation.
+```sh
+python3 /path/to/CatalystConnectSwift/scripts/build-apple.py \
+  --transport /path/to/CatalystConnect --users /path/to/CatalystUsersSwift \
+  --build-dir /path/to/native-build --output /path/to/new-ApplePackage
+```
 
-These are planned responsibilities. Swift APIs, supported Apple platforms,
-network integration, and packaging have not been implemented here.
+Select the generated `CatalystUsers` product in Xcode/SwiftPM. Current slices cover
+Apple Silicon macOS, arm64 iOS device and arm64 Simulator. The repository's own
+manifest is the source-development form; the generated package supplies native
+archive linking automatically.
 
-## Installation and development
+```swift
+import CatalystConnect
+import CatalystUsers
 
-Install the Catalyst development environment through
-[BVC](https://github.com/BenjaVisionPro/bvc#install). There is no functional
-package from this repository to install yet.
+// The host provisions and connects its mutually pinned ConnectClient.
+let users = try CUUsers(connect: connect)
+try await users.prepare()             // One startup description/service probe.
+let result = try await users.createUser(CUUser(name: "Ada"))
+// result is a new CUUser reconstructed from the committed server response.
+```
 
-Read the [component design](https://github.com/BenjaVisionPro/catalyst-workspace/blob/main/Users/Catalyst-Users-Design.md)
-for the intended scope and remaining integration work. Design documents describe
-the direction; they do not establish a released implementation.
+The object API runs on MainActor; descriptions/native objects stay local, while
+only bounded bytes cross the transport actor. `prepare()` must be repeated after
+reconnect. The connection remains caller owned and must be closed during teardown.
+No mutation is automatically replayed. The current server reports rollback and
+other uncertain failed execution as `ObjectBindingError.unknown`; malformed results
+and transport loss cannot produce a user value. Names and `isSuperUser` are the
+current model, without stable tenant/account identifiers. Creating super users is
+rejected by the server. Certificate trust does not grant account privileges.
+
+The existing installed-description profile supports bounded String/Boolean/Int64
+values and rejects unsupported validators, conditions, defaults and relations. It
+is not full graph/4 exchange or remote code/class installation.
+
+The same native Users XCTest suite passes on macOS and iOS Simulator against a
+configured GemStone authority. A held insertion proves no result before commit;
+an independent Gem reads the committed user after the result. Rollback, super-user
+rejection, mismatched descriptions, stale readiness and explicit reconnect are
+verified. See the service repository's `scripts/qualify-platform-users.py` and
+`conformance/platform-create-user-2026-10-29.json`. Device execution is separate
+from the successful unsigned arm64 device build.
 
 ## License
 

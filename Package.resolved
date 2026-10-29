@@ -1,0 +1,22 @@
+{
+  "originHash" : "0d09d17692edfc06ceac166af544381a258903a3915866aa1a929b293f76122c",
+  "pins" : [
+    {
+      "identity" : "catalystconnectswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/BenjaVisionPro/CatalystConnectSwift.git",
+      "state" : {
+        "revision" : "9aadac285f479f433ac44b44182fb5f29c19e08d"
+      }
+    },
+    {
+      "identity" : "magritte-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/BenjaVision-Catalyst/magritte-swift.git",
+      "state" : {
+        "revision" : "420abc5ae5ef2140f3c62102dfabad5a7a30cac2"
+      }
+    }
+  ],
+  "version" : 3
+}

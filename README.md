@@ -1,10 +1,38 @@
 # Catalyst Users for Swift
 
-A native `CUUser` model and `CUUsers` API using the generic description-derived
-Connect object binding. The model owns its Magritte descriptions and native field
-accessors. No Users-specific wire schema or codec exists.
+Native CUUser and MainActor CUUsers use our Magritte Swift port and the existing
+caller-owned ConnectClient. The Fabric adopts the original User after GemStone
+confirms commit, keeps a scoped identity cache, refreshes automatically and recovers
+creation receipts after reconnect.
 
-Build the combined Apple package from the pinned Connect Swift repository:
+```swift
+let users = try CUUsers(connect: connectedTransport)
+let user = CUUser(name: "Ada")
+users.onError = { user, error in /* Present or record the error. */ }
+users.createUser(user) // Optional one-shot operation; ignoring it does not cancel execution.
+user.name = "Ada Lovelace" // Preserved if confirmation is still in flight.
+let cached = try await users.getUser(named: "Ada Lovelace")
+```
+
+Observe `objectWillChange`, `replica` and `lastError`. Name edits are submitted by
+a bounded per-connection coordinator. Configure CULiveUserPolicy live, disable its
+automaticRefresh for manual `synchronizeNow`, and use `resolveConflict` explicitly
+for conflicts or uncertain updates. A read never authorizes an uncertain write's
+replay. `stopObserving` stops the shared scope; the host closes the transport.
+Swift CUUsers instances sharing a ConnectClient share policy/cache. Keep User
+instances while observed. The host owns reconnect; the Fabric renegotiates itself.
+
+Enable server operations 3/4/5/6/65534 with an authoritative Users binding. Current
+creation/update permissions are peer scoped, without account/tenant authorization.
+Exact name lookup returns nil for absence and refuses ambiguous matches. Managed
+super-user state is server owned. Magritte metadata supports client UI work;
+no UI generator is delivered here. Refresh currently polls full state.
+
+For legacy operations 1/2 call `prepare()` then `createUserSnapshot` or
+`getUserSnapshot(named:)`; prepare again after reconnect. These preserve the
+original scalar schema and fresh-result semantics.
+
+Build the combined macOS/iOS package:
 
 ```sh
 python3 /path/to/CatalystConnectSwift/scripts/build-apple.py \
@@ -12,49 +40,11 @@ python3 /path/to/CatalystConnectSwift/scripts/build-apple.py \
   --build-dir /path/to/native-build --output /path/to/new-ApplePackage
 ```
 
-Select the generated `CatalystUsers` product in Xcode/SwiftPM. Current slices cover
-Apple Silicon macOS, arm64 iOS device and arm64 Simulator. The repository's own
-manifest is the source-development form; the generated package supplies native
-archive linking automatically.
-
-```swift
-import CatalystConnect
-import CatalystUsers
-
-// The host provisions and connects its mutually pinned ConnectClient.
-let users = try CUUsers(connect: connect)
-try await users.prepare()             // One startup description/service probe.
-let result = try await users.createUser(CUUser(name: "Ada"))
-let found = try await users.getUser(named: "Ada") // CUUser?; nil means explicit not found.
-// result is a new CUUser reconstructed from the committed server response.
-```
-
-Lookup matches the exact, case-sensitive name. An ambiguous name throws
-`ObjectBindingError.refused(status: 422)`; absence returns nil without substituting
-`unknownUser`. Lookup requests reuse the model's name description and successful
-results use its unchanged complete description. Enable server operations 1, 2 and
-65534; `prepare()` establishes both agreements.
-
-The object API runs on MainActor; descriptions/native objects stay local, while
-only bounded bytes cross the transport actor. `prepare()` must be repeated after
-reconnect. The connection remains caller owned and must be closed during teardown.
-No mutation is automatically replayed. The current server reports rollback and
-other uncertain failed execution as `ObjectBindingError.unknown`; malformed results
-and transport loss cannot produce a user value. Names and `isSuperUser` are the
-current model, without stable tenant/account identifiers. Creating super users is
-rejected by the server. Certificate trust does not grant account privileges.
-
-The existing installed-description profile supports bounded String/Boolean/Int64
-values and rejects unsupported validators, conditions, defaults and relations. It
-is not full graph/4 exchange or remote code/class installation.
-
-The same native Users XCTest suite passes on macOS and iOS Simulator against a
-configured GemStone authority. A held insertion proves no result before commit;
-an independent Gem reads the committed user after the result. Rollback, super-user
-rejection, mismatched descriptions, stale readiness and explicit reconnect are
-verified. See the service repository's `scripts/qualify-platform-users.py` and
-`conformance/platform-create-user-2026-10-29.json`. Device execution is separate
-from the successful unsigned arm64 device build.
+The generated package supplies native archive linking. The repository manifest is
+the source-development form. See the Users service repository's
+`docs/Connect-CreateUser.md` and `scripts/qualify-platform-users.py` for protocol,
+recovery limits, installation and native qualification. Physical-device execution,
+graph/4 transfer, push subscriptions and production account security remain future work.
 
 ## License
 

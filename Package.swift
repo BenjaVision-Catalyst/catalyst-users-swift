@@ -4,7 +4,7 @@ let package = Package(
     name: "CatalystUsersSwift", platforms: [.macOS(.v13), .iOS(.v16)],
     products: [.library(name: "CatalystUsers", targets: ["CatalystUsers"])],
     dependencies: [
-        .package(url: "https://github.com/BenjaVisionPro/CatalystConnectSwift.git", revision: "1bc971c560fab49a6c5dd6a14455ef64e7b5c406"),
+        .package(url: "https://github.com/BenjaVisionPro/CatalystConnectSwift.git", revision: "867b1779e2685470ff3941814efe2b7651ba3eec"),
         .package(url: "https://github.com/BenjaVision-Catalyst/magritte-swift.git", revision: "420abc5ae5ef2140f3c62102dfabad5a7a30cac2")
     ],
     targets: [.target(name: "CatalystUsers", dependencies: [

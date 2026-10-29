@@ -27,12 +27,18 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
     }
     private let transport: ConnectClient
     private(set) var policy: CULiveUserPolicy
-    private let create, read, update, recover: ObjectBinding<CUUserChange, CULiveUserState>
+    private let create, read, update, recover, subscribe, receive, unsubscribe: ObjectBinding<CUUserChange, CULiveUserState>
     private var objects: [ObjectIdentifier: WeakUser] = [:]
     private var identities: [String: WeakUser] = [:]
     private var jobs: [UUID: Task<Void, Never>] = [:]
     private var preparation: Task<Void, Error>?
     private var preparedSession: ConnectSession?
+    private var feedKey = UUID().uuidString
+    private var subscriptions = Set<String>(), attemptedRecoveries = Set<String>()
+    private var receiving: Task<Void, Never>?
+    private var receiveGeneration = UUID()
+    private var writesInFlight = Set<ObjectIdentifier>()
+    private var deferredStates: [ObjectIdentifier: CULiveUserState] = [:]
     private var timer: Task<Void, Never>?
     private var synchronizing = false, stopped = false
     var onError: ((CUUser, Error) -> Void)?
@@ -42,6 +48,7 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
             try ObjectBinding(transport: transport, operation: code, request: CUUserChange(), result: CULiveUserState(), profile: .stateV2)
         }
         create = try binding(3); read = try binding(4); update = try binding(5); recover = try binding(6)
+        subscribe = try binding(7); receive = try binding(8); unsubscribe = try binding(9)
     }
     private func activate() {
         guard timer == nil, !stopped, policy.automaticRefresh else { return }
@@ -49,7 +56,7 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
         timer = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: interval) } catch { return }
-                if let context = self { await context.synchronize() } else { return }
+                if let context = self { await context.synchronize(automatic: true) } else { return }
             }
         }
     }
@@ -61,6 +68,8 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
         let task = Task { @MainActor [self] in
             try await create.prepare(); try await read.prepare(); try await update.prepare(); try await recover.prepare()
             guard try await transport.currentSession() == session else { throw ConnectError.notReady }
+            try await subscribe.prepare(); try await receive.prepare(); try await unsubscribe.prepare()
+            resetFeed()
             preparedSession = session
         }
         preparation = task
@@ -135,7 +144,7 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
         let user = identities[state.userIdentifier]?.value ?? CUUser()
         try track(user); return try install(state, into: user)
     }
-    func synchronize() async {
+    func synchronize(automatic: Bool = false) async {
         guard !synchronizing, !stopped else { return }
         synchronizing = true; defer { synchronizing = false }
         let current = objects.values.compactMap(\.value)
@@ -151,7 +160,8 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
             do {
                 let change = CUUserChange(); change.operationIdentifier = UUID().uuidString
                 if user.replica.identifier.isEmpty {
-                    guard !user.creationKey.isEmpty else { continue }
+                    guard !user.creationKey.isEmpty, !automatic || !attemptedRecoveries.contains(user.creationKey) else { continue }
+                    attemptedRecoveries.insert(user.creationKey)
                     change.operationIdentifier = user.creationKey
                     let state = try await recover.call(change)
                     if state.outcome == "created" { try install(state, into: user, sent: user.creationSequence) }
@@ -161,11 +171,17 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
                 if user.replica.hasEdits && (user.replica.phase == .live || user.replica.phase == .stale) {
                     change.name = user.name; change.expectedRevision = user.replica.editBase
                     let sequence = user.replica.editSequence
+                    let token = ObjectIdentifier(user); writesInFlight.insert(token)
+                    defer {
+                        writesInFlight.remove(token)
+                        if let deferred = deferredStates.removeValue(forKey: token), deferred.revision > user.replica.revision { try? install(deferred, into: user) }
+                    }
                     let state = try await update.call(change)
                     if state.outcome == "updated" { try install(state, into: user, sent: sequence) }
                     else if state.outcome == "conflict" { try install(state, into: user); user.replica.transition(.conflict); report(user, CUUserFabricError.conflict) }
                     else { user.replica.transition(.refused); report(user, CUUserFabricError.refused) }
                 } else {
+                    if automatic { continue } // Clean replicas receive state from the authority; no periodic read.
                     let state = try await read.call(change)
                     if state.outcome == "current" { try install(state, into: user) }
                     else if state.outcome == "notFound" { user.replica.transition(.notFound) }
@@ -173,6 +189,61 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
                 }
             } catch {
                 preparedSession = nil; user.replica.transition(.uncertain); report(user, error)
+            }
+        }
+        if policy.automaticRefresh { await maintainSubscriptions() }
+    }
+    private func resetFeed() {
+        receiveGeneration = UUID(); receiving?.cancel(); receiving = nil
+        feedKey = UUID().uuidString; subscriptions.removeAll(); attemptedRecoveries.removeAll()
+    }
+    private func maintainSubscriptions() async {
+        let retained = Set(objects.values.compactMap(\.value).map { $0.replica.identifier }.filter { !$0.isEmpty })
+        do {
+            for identifier in subscriptions.subtracting(retained) {
+                let change = CUUserChange(); change.operationIdentifier = feedKey; change.userIdentifier = identifier
+                _ = try await unsubscribe.call(change); subscriptions.remove(identifier)
+            }
+            for identifier in retained.subtracting(subscriptions) {
+                guard let user = identities[identifier]?.value else { continue }
+                let change = CUUserChange(); change.operationIdentifier = feedKey; change.userIdentifier = identifier; change.expectedRevision = user.replica.revision
+                let state = try await subscribe.call(change)
+                guard state.outcome == "current" else { throw CUUserFabricError.refused }
+                if state.revision >= user.replica.revision { try install(state, into: user) }
+                subscriptions.insert(identifier)
+            }
+            startReceiving()
+        } catch {
+            for user in objects.values.compactMap(\.value) { report(user, error) }
+            preparedSession = nil; resetFeed()
+        }
+    }
+    private func startReceiving() {
+        guard receiving == nil, !subscriptions.isEmpty, !stopped, policy.automaticRefresh else { return }
+        let generation = receiveGeneration
+        receiving = Task { @MainActor [weak self] in
+            var acknowledgedID = "", acknowledgedRevision: Int64 = 0
+            while !Task.isCancelled {
+                guard let context = self, generation == context.receiveGeneration, !context.stopped, context.policy.automaticRefresh, !context.subscriptions.isEmpty else { return }
+                let change = CUUserChange(); change.operationIdentifier = context.feedKey
+                change.userIdentifier = acknowledgedID; change.expectedRevision = acknowledgedRevision
+                do {
+                    let state = try await context.receive.call(change, timeout: .seconds(20))
+                    guard generation == context.receiveGeneration, !Task.isCancelled else { return }
+                    if state.outcome == "renew" { continue } // Lease heartbeat carries no User snapshot.
+                    guard state.outcome == "current", context.subscriptions.contains(state.userIdentifier) else { throw CUUserFabricError.incompatibleState }
+                    acknowledgedID = state.userIdentifier; acknowledgedRevision = state.revision
+                    if let user = context.identities[state.userIdentifier]?.value {
+                        let token = ObjectIdentifier(user)
+                        if context.writesInFlight.contains(token) { context.deferredStates[token] = state }
+                        else if state.revision > user.replica.revision { try context.install(state, into: user) }
+                    }
+                } catch {
+                    guard generation == context.receiveGeneration else { return }
+                    context.preparedSession = nil; context.resetFeed()
+                    for user in context.objects.values.compactMap(\.value) where user.replica.phase == .live { user.replica.transition(.stale) }
+                    return
+                }
             }
         }
     }
@@ -195,10 +266,11 @@ private final class WeakUser { weak var value: CUUser?; init(_ value: CUUser) { 
         let liveCount = objects.values.compactMap(\.value).count
         guard (max(1, liveCount)...256).contains(policy.maximumObjects), policy.refreshInterval >= .milliseconds(20) else { throw CUUserFabricError.capacity }
         self.policy = policy; timer?.cancel(); timer = nil
+        if !policy.automaticRefresh { resetFeed() }
         if !stopped { activate() }
     }
     func stop() {
-        stopped = true; timer?.cancel(); timer = nil; preparedSession = nil
+        stopped = true; timer?.cancel(); timer = nil; preparedSession = nil; resetFeed()
         for user in objects.values.compactMap(\.value) { user.replica.transition(.stale) }
         // Admitted jobs retain ownership until the existing Connect completion is terminal.
     }

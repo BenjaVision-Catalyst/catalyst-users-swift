@@ -2,7 +2,7 @@
 
 Native CUUser and MainActor CUUsers use our Magritte Swift port and the existing
 caller-owned ConnectClient. The Fabric adopts the original User after GemStone
-confirms commit, keeps a scoped identity cache, refreshes automatically and recovers
+confirms commit, keeps a scoped identity cache, receives pushed changes and recovers
 creation receipts after reconnect.
 
 ```swift
@@ -22,11 +22,12 @@ replay. `stopObserving` stops the shared scope; the host closes the transport.
 Swift CUUsers instances sharing a ConnectClient share policy/cache. Keep User
 instances while observed. The host owns reconnect; the Fabric renegotiates itself.
 
-Enable server operations 3/4/5/6/65534 with an authoritative Users binding. Current
+Enable server operations 3/4/5/6/7/8/9/65534 with an authoritative Users binding. Current
 creation/update permissions are peer scoped, without account/tenant authorization.
 Exact name lookup returns nil for absence and refuses ambiguous matches. Managed
 super-user state is server owned. Magritte metadata supports client UI work;
-no UI generator is delivered here. Refresh currently polls full state.
+no UI generator is delivered here. Updates arrive through one server-held change
+receive per scope; idle clients do not poll User state.
 
 For legacy operations 1/2 call `prepare()` then `createUserSnapshot` or
 `getUserSnapshot(named:)`; prepare again after reconnect. These preserve the
@@ -44,7 +45,14 @@ The generated package supplies native archive linking. The repository manifest i
 the source-development form. See the Users service repository's
 `docs/Connect-CreateUser.md` and `scripts/qualify-platform-users.py` for protocol,
 recovery limits, installation and native qualification. Physical-device execution,
-graph/4 transfer, push subscriptions and production account security remain future work.
+graph/4 transfer and production account security remain future work.
+
+GemStone authorities deliver changes after commit. GT authorities deliver after
+volatile Runtime finalization, without claiming persistence/rollback. The feed
+reuses deferred replies, coalesces by User identity, and renews on change or a
+bounded lease heartbeat. Reconnect resubscribes/resnapshots; unknown mutations are
+never automatically replayed. See service documentation for configurable feed
+limits and the dedicated `--push-only --authority gt` native qualification.
 
 ## License
 

@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-29",
+  "passed": true,
+  "scope": "Swift macOS, iOS Simulator and Unreal UE5.8 Mac arm64 to GemStone and GT authorities",
+  "transport": {
+    "nativeABI": 1,
+    "alpn": "catalyst-connect/1",
+    "nativeSourceChanged": false,
+    "unsolicitedFramesAdded": false,
+    "requestRevision": "71f6a5241e5dea62f3bc651e8a1b3aafe8ddfcaae9eda7e147807c865adadbf1",
+    "stateRevision": "6f4dc62ac9dfdcb45922152eb2f18d591222476b2ca5b1ccfc34676065fb4985"
+  },
+  "mechanism": "One server-held change receive per client scope; coalesced state by identity; acknowledgment; lease heartbeat; existing deferred replies and Runtime route/finalization",
+  "operations": {
+    "7": "subscribe",
+    "8": "receive changes",
+    "9": "unsubscribe"
+  },
+  "tests": {
+    "gtExamples": 106,
+    "gtFailures": 0,
+    "nativeGemStoneSelectedExamples": 7,
+    "swiftSchemaTests": 5,
+    "swiftSchemaFailures": 0,
+    "ueEditorBuild": "passed",
+    "ueGameBuild": "passed",
+    "iosArm64UnsignedDeviceBuild": "passed; not executed on hardware"
+  },
+  "reference": "https://github.com/BenjaVision-Catalyst/catalyst-users/blob/main/conformance/pushed-users-2026-10-29.json",
+  "gemstoneRuntime": "platform_users_4b592c676f8c",
+  "gtRuntime": "platform_users_2a4c37c50d72",
+  "allSixClientAuthorityCasesPassed": true,
+  "zeroUserReadsAcrossThreeIdleWindowsPerAuthority": true,
+  "gemstoneCommittedPublicationSamples": 15,
+  "gtVolatilePublicationSamples": 12,
+  "originalMCPRegistriesRestored": true,
+  "gtRebuilt": false
+}

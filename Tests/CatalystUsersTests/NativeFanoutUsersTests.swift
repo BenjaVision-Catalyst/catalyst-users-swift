@@ -14,6 +14,17 @@ private struct FanoutState: Codable {
     }
 }
 
+@MainActor private final class FanoutWriter {
+    var states: [FanoutState] = []
+    var writes: [[String: Any]] = []
+    var active = 0, peakActive = 0
+}
+
+@MainActor private func runFanoutLane(_ lane: Int, lanes: Int, count: Int,
+    send: @escaping @MainActor @Sendable (Int, Int) async throws -> Void) async throws {
+    for ordinal in stride(from: lane, to: count, by: lanes) { try await send(ordinal, lane) }
+}
+
 @MainActor private final class FanoutObserver {
     let index: Int, transport: ConnectClient, slow: Bool
     var users: CUUsers?, values: [CUUser] = [], identities: [ObjectIdentifier] = []
@@ -207,12 +218,15 @@ private struct FanoutState: Codable {
                 let update = try ObjectBinding(transport: transport, operation: 5, request: CUUserChange(), result: CULiveUserState(), profile: .stateV2)
                 try await create.prepare(); try await update.prepare()
                 let prefix = config["prefix"] as! String
-                var states: [FanoutState] = [], writes: [[String: Any]] = []
+                let writer = FanoutWriter()
+                var phases: [[String: Any]] = []
+                let concurrency = config["writerConcurrency"] as? Int ?? 1
+                guard (1...3).contains(concurrency) else { throw NSError(domain: "Fanout writer concurrency must be 1...3", code: 3) }
                 for index in 0..<3 {
                     let request = CUUserChange(); request.name = prefix + ":user" + String(index); request.operationIdentifier = UUID().uuidString
-                    let result = try await create.call(request); XCTAssertEqual(result.outcome, "created"); states.append(FanoutState(result))
+                    let result = try await create.call(request); XCTAssertEqual(result.outcome, "created"); writer.states.append(FanoutState(result))
                 }
-                func save(_ name: String) throws { try JSONEncoder().encode(states).write(to: directory.appendingPathComponent(name), options: .atomic) }
+                func save(_ name: String) throws { try JSONEncoder().encode(writer.states).write(to: directory.appendingPathComponent(name), options: .atomic) }
                 try save("seed.json")
                 var sequence = 0
                 for (gate, result, count) in [("start", "baseline.json", 9), ("burst-go", "burstA.json", 192),
@@ -220,27 +234,50 @@ private struct FanoutState: Codable {
                     _ = try await wait(gate)
                     let interval = result.hasPrefix("burst") ? (config["writeIntervalMillis"] as? Double ?? 0) / 1000 : 0
                     let phaseStart = ProcessInfo.processInfo.systemUptime
-                    for ordinal in 0..<count {
+                    let lanes = result.hasPrefix("burst") ? concurrency : 1
+                    let sequenceStart = sequence; sequence += count
+                    writer.peakActive = 0
+                    let send: @MainActor @Sendable (Int, Int) async throws -> Void = { ordinal, lane in
                         let offeredAt = phaseStart + Double(ordinal) * interval
                         let delay = offeredAt - ProcessInfo.processInfo.systemUptime
                         if interval > 0 && delay > 0 { try await Task.sleep(for: .nanoseconds(Int64(delay * 1_000_000_000))) }
                         if FileManager.default.fileExists(atPath: directory.appendingPathComponent("abort").path) { throw NSError(domain: "Fanout controller aborted", code: 2) }
-                        let index = sequence % 3; sequence += 1
-                        let request = CUUserChange(); request.userIdentifier = states[index].userIdentifier
-                        request.expectedRevision = states[index].revision; request.operationIdentifier = UUID().uuidString
-                        request.name = prefix + ":user" + String(index) + ":r" + String(sequence) + ":" + String(repeating: "x", count: 800)
+                        // Concurrent lanes own distinct Users: no stale-revision retries
+                        // or application replay are needed to generate load.
+                        let index = lanes == 1 ? (sequenceStart + ordinal) % 3 : lane
+                        let request = CUUserChange(); request.userIdentifier = writer.states[index].userIdentifier
+                        request.expectedRevision = writer.states[index].revision; request.operationIdentifier = UUID().uuidString
+                        request.name = prefix + ":user" + String(index) + ":r" + String(sequenceStart + ordinal + 1) + ":" + String(repeating: "x", count: 800)
                         let begin = ProcessInfo.processInfo.systemUptime
+                        writer.active += 1; writer.peakActive = max(writer.peakActive, writer.active)
+                        let activeAtSubmission = writer.active
+                        defer { writer.active -= 1 }
                         let response = try await update.call(request, timeout: .seconds(30))
                         XCTAssertEqual(response.outcome, "updated"); XCTAssertEqual(response.revision, request.expectedRevision + 1)
-                        states[index] = FanoutState(response)
-                        writes.append(["user": response.userIdentifier, "revision": response.revision, "sentAt": begin,
+                        writer.states[index] = FanoutState(response)
+                        writer.writes.append(["user": response.userIdentifier, "revision": response.revision, "sentAt": begin,
                                        "replyAt": ProcessInfo.processInfo.systemUptime, "phase": result,
-                                       "offeredAt": interval > 0 ? offeredAt : begin])
+                                       "offeredAt": interval > 0 ? offeredAt : begin,
+                                       "ordinal": ordinal, "lane": lane, "activeAtSubmission": activeAtSubmission])
                         if result == "baseline.json" { try await Task.sleep(for: .milliseconds(100)) }
                     }
+                    if lanes == 1 {
+                        for ordinal in 0..<count { try await send(ordinal, 0) }
+                    } else {
+                        async let first: Void = runFanoutLane(0, lanes: lanes, count: count, send: send)
+                        async let second: Void = runFanoutLane(1, lanes: lanes, count: count, send: send)
+                        if lanes == 3 {
+                            async let third: Void = runFanoutLane(2, lanes: lanes, count: count, send: send)
+                            _ = try await (first, second, third)
+                        } else {
+                            _ = try await (first, second)
+                        }
+                    }
+                    phases.append(["phase": result, "startedAt": phaseStart, "finishedAt": ProcessInfo.processInfo.systemUptime,
+                                   "requests": count, "concurrency": lanes, "peakActive": writer.peakActive, "activeAtEnd": writer.active])
                     try save(result)
                 }
-                try write("writer-result.json", ["writes": writes, "count": writes.count])
+                try write("writer-result.json", ["writes": writer.writes, "count": writer.writes.count, "phases": phases, "writerConcurrency": concurrency])
                 _ = try await wait("stop")
                 await transport.close(); try write("writer-done.json", ["closed": true])
             } catch { await transport.close(); try? write("writer-error.json", ["error": String(describing: error)]); throw error }
